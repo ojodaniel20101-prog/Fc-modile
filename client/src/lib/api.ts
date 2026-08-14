@@ -7,8 +7,11 @@
 
 const API_BASE = "https://backup.mrbelieverhub.com/wp-json/wp/v2";
 
+export type CoreStatKey = "PAC" | "SHO" | "PAS" | "DRI" | "DEF" | "PHY";
+
 export interface Player {
   postId: number;
+  sourceId: string;
   id: string;
   name: string;
   shortName: string;
@@ -17,6 +20,7 @@ export interface Player {
   program: string;
   rating: number;
   team: string;
+  club: string;
   league: string;
   nation: string;
   skillMoves: string;
@@ -25,13 +29,16 @@ export interface Player {
   weight: string;
   workRate: string;
   image: string;
+  imageUrl: string;
   teamLogo: string;
+  clubBadgeUrl: string;
   nationFlag: string;
+  nationBadgeUrl: string;
   leagueLogo: string;
   textColourCode: string;
   stats: Record<string, number>;
+  details: Record<string, number>;
 }
-
 export interface NewsItem {
   id: number;
   title: string;
@@ -106,8 +113,13 @@ export function parseAcfToPlayer(postId: number, acf: ACF): Player {
   for (const k of statKeys) {
     if (acf[k]) stats[k] = num(acf[k]);
   }
+  const team = str(acf["team"] ?? acf["club"] ?? "");
+  const imageUrl = img(acf["image_url"] ?? acf["player_image"]);
+  const clubBadgeUrl = img(acf["club_badge_url"] ?? acf["team_logo"]);
+  const nationBadgeUrl = img(acf["nation_badge_url"] ?? acf["nation_flag"]);
   return {
     postId,
+    sourceId: str(acf["source_id"] ?? acf["id"] ?? postId),
     id: str(acf["id"] ?? ""),
     name: str(acf["player_name"] ?? ""),
     shortName: str(acf["short_name"] ?? ""),
@@ -115,7 +127,8 @@ export function parseAcfToPlayer(postId: number, acf: ACF): Player {
     altPositions: str(acf["alt_positions"] ?? ""),
     program: str(acf["program"] ?? ""),
     rating: num(acf["rating"]),
-    team: str(acf["team"] ?? ""),
+    team,
+    club: team,
     league: str(acf["league"] ?? ""),
     nation: str(acf["nation"] ?? ""),
     skillMoves: str(acf["skill_moves"] ?? ""),
@@ -123,12 +136,16 @@ export function parseAcfToPlayer(postId: number, acf: ACF): Player {
     height: str(acf["height"] ?? ""),
     weight: str(acf["weight"] ?? ""),
     workRate: str(acf["work_rate"] ?? ""),
-    image: img(acf["player_image"]),
-    teamLogo: img(acf["team_logo"]),
-    nationFlag: img(acf["nation_flag"]),
+    image: imageUrl,
+    imageUrl,
+    teamLogo: clubBadgeUrl,
+    clubBadgeUrl,
+    nationFlag: nationBadgeUrl,
+    nationBadgeUrl,
     leagueLogo: img(acf["league_logo"]),
     textColourCode: str(acf["text_colour_code"] ?? ""),
     stats,
+    details: {},
   };
 }
 
@@ -232,35 +249,8 @@ function writeRenderCache(map: Record<string, string>) {
  * Falls back to on-demand scraping if not cached.
  */
 export async function fetchPlayerRender(player: Player): Promise<string> {
-  const cache = readRenderCache();
-  const cacheKey = String(player.postId || player.id);
-  if (cache[cacheKey]) return cache[cacheKey];
-
-  const playerName = player.shortName || player.name;
-  if (!playerName) return "";
-
-  try {
-    const res = await fetch(
-      `/api/cached-player-render?playerName=${encodeURIComponent(playerName)}`,
-      { signal: AbortSignal.timeout(15000) },
-    );
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      console.error(`fetchPlayerRender failed (${res.status}):`, detail.slice(0, 300));
-      return "";
-    }
-    const result = (await res.json()) as { success?: boolean; imageUrl?: string };
-    const url = result.imageUrl || "";
-
-    if (url) {
-      cache[cacheKey] = url;
-      writeRenderCache(cache);
-    }
-    return url;
-  } catch (err) {
-    console.error("fetchPlayerRender exception:", err);
-    return "";
-  }
+  // imageUrl is already included in the Player object from /api/players/lookup
+  return player.imageUrl || "";
 }
 
 /* ---------- News ---------- */
@@ -324,11 +314,68 @@ export function matchesPosition(player: Player, pos: Position): boolean {
 }
 
 /** Simple fuzzy search on name/team/nation/league. */
-export function searchPlayers(players: Player[], query: string, pos: Position): Player[] {
+function normalizeLookupPlayer(raw: Partial<Player>): Player {
+  const team = raw.team ?? raw.club ?? "";
+  const imageUrl = raw.imageUrl ?? raw.image ?? "";
+  const clubBadgeUrl = raw.clubBadgeUrl ?? raw.teamLogo ?? "";
+  const nationBadgeUrl = raw.nationBadgeUrl ?? raw.nationFlag ?? "";
+  return {
+    postId: raw.postId ?? (Number(raw.sourceId ?? raw.id ?? 0) || 0),
+    sourceId: raw.sourceId ?? String(raw.id ?? raw.postId ?? ""),
+    id: raw.id ?? "",
+    name: raw.name ?? "",
+    shortName: raw.shortName ?? raw.name ?? "",
+    position: raw.position ?? "",
+    altPositions: raw.altPositions ?? "",
+    program: raw.program ?? "",
+    rating: raw.rating ?? 0,
+    team,
+    club: raw.club ?? team,
+    league: raw.league ?? "",
+    nation: raw.nation ?? "",
+    skillMoves: raw.skillMoves ?? "",
+    strongWeakFoot: raw.strongWeakFoot ?? "",
+    height: raw.height ?? "",
+    weight: raw.weight ?? "",
+    workRate: raw.workRate ?? "",
+    image: imageUrl,
+    imageUrl,
+    teamLogo: clubBadgeUrl,
+    clubBadgeUrl,
+    nationFlag: nationBadgeUrl,
+    nationBadgeUrl,
+    leagueLogo: raw.leagueLogo ?? "",
+    textColourCode: raw.textColourCode ?? "",
+    stats: raw.stats ?? {},
+    details: raw.details ?? {},
+  };
+}
+
+async function searchPlayersByLookup(query: string): Promise<Player[]> {
+  if (!query.trim()) return [];
+  try {
+    const response = await fetch(`/api/players/lookup?query=${encodeURIComponent(query)}`);
+    if (!response.ok) return [];
+    const data = await response.json() as { success: boolean; players: Partial<Player>[] };
+    return data.success ? data.players.map(normalizeLookupPlayer) : [];
+  } catch (error) {
+    console.error("Player search error:", error);
+    return [];
+  }
+}
+
+export function searchPlayers(query: string): Promise<Player[]>;
+export function searchPlayers(players: Player[], query: string, pos: Position): Player[];
+export function searchPlayers(
+  queryOrPlayers: string | Player[],
+  query = "",
+  pos: Position = "ALL",
+): Promise<Player[]> | Player[] {
+  if (typeof queryOrPlayers === "string") return searchPlayersByLookup(queryOrPlayers);
   const q = query.toLowerCase().trim();
-  let list = players;
+  let list = queryOrPlayers;
   if (q.length > 0) {
-    list = players.filter(
+    list = queryOrPlayers.filter(
       (p) =>
         p.name.toLowerCase().includes(q) ||
         p.shortName.toLowerCase().includes(q) ||

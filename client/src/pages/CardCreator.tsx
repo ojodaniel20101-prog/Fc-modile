@@ -217,7 +217,7 @@ export default function CardCreator() {
     setRenderUrl(null);
     setCfg({
       name: p.shortName || p.name,
-      rating: parseInt(p.rating as string) || 99,
+      rating: typeof p.rating === "number" ? p.rating : parseInt(p.rating, 10) || 99,
       position: p.position || "ST",
       programme: p.program || "",
       team: p.team || "",

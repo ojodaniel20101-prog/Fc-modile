@@ -12,8 +12,8 @@ import PageHeader from "@/components/PageHeader";
 import { usePlayers } from "@/hooks/usePlayers";
 import { Player, fetchPlayerRender } from "@/lib/api";
 
-const canvasW = 620;
-const canvasH = 900;
+const canvasW = 460;
+const canvasH = 660;
 
 interface CardConfig {
   name: string;
@@ -37,6 +37,21 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 function drawCard(ctx: CanvasRenderingContext2D, cfg: CardConfig, img: HTMLImageElement | null) {
   const W = canvasW;
   const H = canvasH;
+
+  if (img) {
+    // Real official card render exists — draw ONLY this image,
+    // scaled to fill the canvas with "contain" sizing, no custom
+    // frame/text on top (the image already has all of that baked in).
+    ctx.clearRect(0, 0, W, H);
+    const scale = Math.min(W / img.width, H / img.height) * 0.96; // small padding
+    const drawW = img.width * scale;
+    const drawH = img.height * scale;
+    const dx = (W - drawW) / 2;
+    const dy = (H - drawH) / 2;
+    ctx.drawImage(img, dx, dy, drawW, drawH);
+    return; // skip all the custom frame/text code below
+  }
+
   ctx.clearRect(0, 0, W, H);
 
   const accent = cfg.accent === "gold" ? [255, 215, 0] : [0, 212, 255];
@@ -103,6 +118,7 @@ function drawCard(ctx: CanvasRenderingContext2D, cfg: CardConfig, img: HTMLImage
   // player image (smaller cutout-style)
   if (img) {
     ctx.save();
+    const renderImg = img as HTMLImageElement;
     const imgW = W * 0.5;  // 50% width
     const imgH = H * 0.35; // 35% height
     const imgX = W * 0.25;
@@ -113,7 +129,7 @@ function drawCard(ctx: CanvasRenderingContext2D, cfg: CardConfig, img: HTMLImage
     // tinted backdrop so transparent PNGs blend
     ctx.fillStyle = "rgba(15,15,30,0.9)";
     ctx.fillRect(imgX, imgY, imgW, imgH);
-    const ar = img.width / img.height;
+    const ar = renderImg.width / renderImg.height;
     let dw = imgW;
     let dh = dw / ar;
     if (dh < imgH) {
@@ -122,7 +138,7 @@ function drawCard(ctx: CanvasRenderingContext2D, cfg: CardConfig, img: HTMLImage
     }
     const dx = imgX + (imgW - dw) / 2;
     const dy = imgY + (imgH - dh) / 2;
-    ctx.drawImage(img, dx, dy, dw, dh);
+    ctx.drawImage(renderImg, dx, dy, dw, dh);
     ctx.restore();
   }
 
@@ -265,7 +281,7 @@ export default function CardCreator() {
               ref={canvasRef}
               width={canvasW}
               height={canvasH}
-              className="max-h-[50vh] sm:max-h-[65vh] lg:max-h-[72vh] w-auto max-w-full drop-shadow-[0_0_40px_rgba(255,215,0,0.18)]"
+              className="max-h-[38vh] sm:max-h-[50vh] lg:max-h-[55vh] w-auto max-w-full drop-shadow-[0_0_40px_rgba(255,215,0,0.18)]"
               style={{ imageRendering: "auto" }}
             />
           </div>

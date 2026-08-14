@@ -18,6 +18,104 @@ async function startServer() {
     return `${protocol}://${host}`;
   };
 
+  const allowedImageHosts = new Set(["backup.mrbelieverhub.com", "images-v2.renderz.app"]);
+  const imageRequestHeaders = {
+    "User-Agent": "Mozilla/5.0 (compatible; FC-Mobile-Tools/1.0)",
+    Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+  };
+
+  const proxyImage = async (sourceUrl: string, res: any) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(sourceUrl);
+    } catch {
+      res.status(400).json({ success: false, error: "Invalid image URL" });
+      return;
+    }
+
+    if (parsed.protocol !== "https:" || !allowedImageHosts.has(parsed.hostname)) {
+      res.status(400).json({ success: false, error: "Image host is not allowed" });
+      return;
+    }
+
+    try {
+      const upstream = await fetch(parsed, {
+        headers: imageRequestHeaders,
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!upstream.ok) {
+        res.status(upstream.status).json({ success: false, error: `Image upstream returned ${upstream.status}` });
+        return;
+      }
+
+      let contentType = upstream.headers.get("content-type")?.split(";")[0] || "";
+      const body = Buffer.from(await upstream.arrayBuffer());
+      if (!contentType.startsWith("image/") || contentType === "application/octet-stream") {
+        if (body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) contentType = "image/png";
+        else if (body.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) contentType = "image/jpeg";
+        else if (body.subarray(0, 4).toString() === "RIFF" && body.subarray(8, 12).toString() === "WEBP") contentType = "image/webp";
+        else if (body.subarray(0, 6).toString() === "GIF87a" || body.subarray(0, 6).toString() === "GIF89a") contentType = "image/gif";
+        else {
+          res.status(502).json({ success: false, error: "Image upstream returned a non-image response" });
+          return;
+        }
+      }
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Length", body.length);
+      res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.end(body);
+    } catch (error) {
+      console.error("Image proxy error:", error);
+      res.status(502).json({ success: false, error: "Unable to fetch image" });
+    }
+  };
+
+  // Proxy verified source images so the browser and canvas can load them reliably.
+  app.get("/api/player-image", async (req, res) => {
+    const source = req.query.src;
+    if (!source || typeof source !== "string") {
+      res.status(400).json({ success: false, error: "src query parameter is required" });
+      return;
+    }
+    await proxyImage(source, res);
+  });
+
+  // Resolve a numeric Renderz player ID to its signed image URL, then proxy the image.
+  app.get("/api/player-image/:cardId", async (req, res) => {
+    const cardId = req.params.cardId;
+    if (!/^\d{7,10}$/.test(cardId)) {
+      res.status(400).json({ success: false, error: "Invalid player ID" });
+      return;
+    }
+
+    try {
+      const renderzResponse = await fetch(`https://renderz.app/24/player/${cardId}/__data.json`, {
+        headers: { "User-Agent": imageRequestHeaders["User-Agent"], Accept: "application/json" },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!renderzResponse.ok) {
+        res.status(renderzResponse.status).json({ success: false, error: "Renderz player data unavailable" });
+        return;
+      }
+
+      const renderzText = await renderzResponse.text();
+      const imageMatch = renderzText.match(/https:\/\/images-v2\.renderz\.app\/player[^"\s]+/);
+      if (!imageMatch) {
+        res.status(404).json({ success: false, error: "No Renderz image found" });
+        return;
+      }
+
+      const imageUrl = imageMatch[0].replace(/\\\//g, "/").replace(/\\u0026/g, "&");
+      await proxyImage(imageUrl, res);
+    } catch (error) {
+      console.error("Renderz image lookup error:", error);
+      res.status(502).json({ success: false, error: "Unable to resolve Renderz image" });
+    }
+  });
+
   // --- Player Lookup Endpoint (NEW - uses precompiled catalogue) ---
   app.get("/api/players/lookup", async (req, res) => {
     const { query } = req.query;

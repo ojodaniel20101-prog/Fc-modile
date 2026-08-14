@@ -392,8 +392,6 @@ export default function CardCreator() {
           </div>
 
           <PlayerSearchPanel
-            players={players}
-            loading={loading}
             onAdd={applyPlayer}
             title="Search Players"
             addLabel="Load"

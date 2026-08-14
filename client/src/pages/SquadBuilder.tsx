@@ -381,7 +381,7 @@ export default function SquadBuilder() {
         </div>
 
         {/* Right 1/3 — search sidebar */}
-        <PlayerSearchPanel players={players} loading={loading} onAdd={addPlayer} />
+        <PlayerSearchPanel onAdd={addPlayer} />
       </div>
 
       {error && !loading && (
